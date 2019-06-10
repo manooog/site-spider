@@ -6,70 +6,84 @@ const fs = require("fs");
 const path = require("path");
 const { AGENT } = require("./const");
 
-console.log(path.resolve(__dirname, "css", "../images/lsls"));
-
 const config = {
   userAgent: AGENT.MOBILE,
   root: path.resolve(__dirname, "../../root"),
-  entryURL: "http://www.12337.gov.cn/mobileweb"
+  entryURL: [
+    "http://www.12337.gov.cn/mobileweb/Defaultmobile.aspx",
+    "http://www.12337.gov.cn/mobileweb/index.aspx"
+  ]
 };
 
-const entryInfo = url.parse(config.entryURL);
-const siteRootPath = config.root + "/" + entryInfo.host;
+const entryInfo = url.parse(config.entryURL[0]);
+const siteRootPath = path.join(config.root, entryInfo.host);
 
-loadURL(config.entryURL);
+config.entryURL.map(url => loadURL(url));
 
 async function loadURL(url) {
-  console.time("loadURL");
+  console.time(`loadURL:${url}`);
+  if (fs.existsSync(parseURL(url)[0])) {
+    console.log("url 已存在");
+    return;
+  }
   try {
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
     await page.setUserAgent(config.userAgent);
     await page.goto(url);
     const html = await page.$eval("html", e => e.outerHTML);
-    let location = url.match(/\.(html|aspx)$/)
-      ? "." +
-        page
-          .url()
-          .replace(config.entryURL, "")
-          .replace(/\.[a-z]+/, ".html")
-      : "./index.html";
-    await writeFile(location, html);
+    browser.close();
+
+    await writeFile(url, html);
     console.log("loadURL done,", url);
 
     const $ = cheerio.load(html);
 
-    getResource($, "script", "src");
-    getResource($, "link", "href");
-    getResource($, "img", "src");
+    getResource($, url, "script", "src");
+    getResource($, url, "link", "href");
+    getResource($, url, "img", "src");
 
     //顺着a链接继续爬
     $("a").each(async (i, aTag) => {
-      loadURL(config.entryURL + "/" + constructURL(aTag.attribs.href));
+      loadURL(parseURL(url, aTag.attribs.href)[1]);
     });
-
-    browser.close();
   } catch (error) {
-    console.error(error);
+    // console.error(error);
   }
-  console.timeEnd("loadURL");
+  console.timeEnd(`loadURL:${url}`);
 }
 
+/**
+ * 写一个文件
+ * location 是一个url
+ *
+ * @param {string} location
+ * @param {string} content
+ */
 async function writeFile(location, content) {
+  // 去掉 query 部分
+  location = location.split("?")[0];
+  let filePath;
+  if (/^http/.test(location)) {
+    filePath = parseURL(location)[0];
+  } else {
+    filePath = path.resolve(siteRootPath, location);
+  }
   fs.mkdirSync(siteRootPath, { recursive: true });
-  const filePath = path.resolve(siteRootPath, location);
   const { dir, base } = path.parse(filePath);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, content);
+  fs.writeFileSync(filePath, content.replace(/\.aspx/g, ".html"));
   console.log(`write file done ${location}`);
   if (location.match(/\.css/)) {
     content
       .match(/url\((.*?)\)/g)
-      .map(str => str.replace(/(url\()(.*?)(\))/, "$2"))
+      .map(str => str.replace(/(url\()('|")?(.*?)('|")?(\))/, "$3"))
       .filter(v => {
-        return !/^('|")data/.test(v);
+        return !/^data/.test(v);
       })
-      .map(img => download(constructURL("css", img)));
+      .map(img => {
+        download(parseURL(location, img)[1]);
+      });
   }
 }
 
@@ -78,48 +92,71 @@ async function writeFile(location, content) {
  *
  * @param {string} location
  */
-async function download(location) {
-  const url = config.entryURL + "/" + constructURL(location);
-  if (location.match(/\.(jpg|png|jpeg|gif)/)) {
-    downloadImage(url, location);
+async function download(url) {
+  if (url.match(/\.(jpg|png|jpeg|gif)/)) {
+    downloadImage(url);
   } else {
     axios
       .get(url)
       .then(res => {
-        writeFile(location, res.data);
+        writeFile(url, res.data);
       })
-      .catch(err => console.log(err));
+      .catch(err => {
+        debugger;
+      });
   }
 }
 
-function getResource(source, tag, propName) {
+function getResource(source, url, tag, propName) {
   source(tag).each(async (i, v) => {
     const value = v.attribs[propName];
-    if (value) download(value);
+    if (value && !/^http/.test(value)) download(parseURL(url, value)[1]);
   });
 }
 
-async function downloadImage(url, location) {
-  const _path = path.resolve(siteRootPath, location);
+async function downloadImage(url) {
+  const _path = parseURL(url)[0];
   await writeFile(_path, "");
   const writer = fs.createWriteStream(_path);
-  const response = await axios({
-    url,
-    method: "GET",
-    responseType: "stream"
-  });
-  response.data.pipe(writer);
-  return new Promise((resolve, reject) => {
-    writer.on("finish", () => {
-      resolve();
+  try {
+    const response = await axios({
+      url,
+      method: "GET",
+      responseType: "stream"
     });
-    writer.on("error", reject);
-  });
+    response.data.pipe(writer);
+    return new Promise((resolve, reject) => {
+      writer.on("finish", () => {
+        resolve();
+      });
+      writer.on("error", () => {
+        debugger;
+        reject();
+      });
+    });
+  } catch (error) {
+    // debugger
+  }
 }
 
-function constructURL(...location) {
-  return path
-    .resolve("/", ...location)
-    .replace(path.resolve("/"), "")
-    .replace(/\\/g, "/");
+/**
+ * 把url转换成本地保存的路径
+ *
+ * @param {string} base url
+ * @param {string} target 相对路径
+ * @returns {array}
+ */
+function parseURL(base, target) {
+  let _url = base;
+  let { path: pa, host, protocol } = url.parse(base);
+  let filePath = path.join(siteRootPath, pa);
+  if (target) {
+    let { dir } = path.parse(filePath);
+    filePath = path.resolve(dir, target);
+    let { dir: _urlDir } = path.parse(pa);
+    pa = path.join(_urlDir, target);
+    _url = protocol + "//" + host + pa;
+  }
+  // debugger;
+  return [filePath.replace(/\.aspx/g, ".html"), _url];
 }
