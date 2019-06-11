@@ -4,28 +4,20 @@ const cheerio = require("cheerio");
 const url = require("url");
 const fs = require("fs");
 const path = require("path");
-const { AGENT } = require("./const");
+const config = require("../config");
 
-const config = {
-  userAgent: AGENT.MOBILE,
-  root: path.resolve(__dirname, "../../root"),
-  entryURL: [
-    "http://www.12337.gov.cn/mobileweb/Defaultmobile.aspx",
-    "http://www.12337.gov.cn/mobileweb/index.aspx"
-  ]
-};
+const entryInfo = url.parse(config.siteRoot);
+const siteRootPath = path.join(__dirname, "../", config.root, entryInfo.host);
 
-const entryInfo = url.parse(config.entryURL[0]);
-const siteRootPath = path.join(config.root, entryInfo.host);
-
-config.entryURL.map(url => loadURL(url));
+// 开始爬取
+config.entryURL.map(url => loadURL(config.siteRoot + url));
 
 async function loadURL(url) {
-  console.time(`loadURL:${url}`);
   if (fs.existsSync(parseURL(url)[0])) {
     console.log("url 已存在");
     return;
   }
+  console.time(`loadURL:${url}`);
   try {
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
@@ -48,7 +40,7 @@ async function loadURL(url) {
       loadURL(parseURL(url, aTag.attribs.href)[1]);
     });
   } catch (error) {
-    // console.error(error);
+    console.error(error);
   }
   console.timeEnd(`loadURL:${url}`);
 }
@@ -88,9 +80,9 @@ async function writeFile(location, content) {
 }
 
 /**
+ * 下载资源
  *
- *
- * @param {string} location
+ * @param {string} url 资源url
  */
 async function download(url) {
   if (url.match(/\.(jpg|png|jpeg|gif)/)) {
@@ -101,12 +93,18 @@ async function download(url) {
       .then(res => {
         writeFile(url, res.data);
       })
-      .catch(err => {
-        debugger;
-      });
+      .catch(console.error);
   }
 }
 
+/**
+ * 解析标签得到地址进行下载
+ *
+ * @param {*} source cheerio load html 得到的对象
+ * @param {*} url 当前文件的 url
+ * @param {*} tag 需要获取的标签名字
+ * @param {*} propName 对应标签包含资源的属性名称
+ */
 function getResource(source, url, tag, propName) {
   source(tag).each(async (i, v) => {
     const value = v.attribs[propName];
@@ -114,6 +112,12 @@ function getResource(source, url, tag, propName) {
   });
 }
 
+/**
+ * 下载图片这种二进制文件
+ *
+ * @param {string} url 图片url
+ * @returns {promise}
+ */
 async function downloadImage(url) {
   const _path = parseURL(url)[0];
   await writeFile(_path, "");
@@ -130,12 +134,11 @@ async function downloadImage(url) {
         resolve();
       });
       writer.on("error", () => {
-        debugger;
         reject();
       });
     });
   } catch (error) {
-    // debugger
+    console.error(error);
   }
 }
 
@@ -157,6 +160,5 @@ function parseURL(base, target) {
     pa = path.join(_urlDir, target);
     _url = protocol + "//" + host + pa;
   }
-  // debugger;
   return [filePath.replace(/\.aspx/g, ".html"), _url];
 }
