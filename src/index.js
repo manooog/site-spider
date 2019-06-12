@@ -21,15 +21,7 @@ async function loadURL(url) {
     return;
   }
   try {
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    config.userAgent && (await page.setUserAgent(config.userAgent));
-    config.cookies && (await page.setCookie(...config.cookies));
-    await page.goto(url);
-    urlStack.push(url);
-    console.log("loadURL done,", url);
-    const html = await page.content();
-    browser.close();
+    const html = await openURL(url, config);
 
     await writeFile(url, html);
 
@@ -46,6 +38,40 @@ async function loadURL(url) {
   } catch (error) {
     console.error(error);
   }
+}
+
+async function openURL(url, opts = {}) {
+  const _opts = {
+    userAgent: "",
+    cookies: [],
+    static: false,
+    ...opts
+  };
+  let html;
+  if (_opts.static) {
+    const headers = {};
+    if (_opts.cookies.length > 0) {
+      headers.Cookie = _opts.cookies.reduce((pre, { name, value }, index) => {
+        let sufix = index != _opts.cookies.length - 1 ? "; " : "";
+        return pre + `${name}=${value}${sufix}`;
+      }, "");
+    }
+    const { data } = await axios.get(url, {
+      headers
+    });
+    html = data;
+  } else {
+    const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+    _opts.userAgent && (await page.setUserAgent(_opts.userAgent));
+    _opts.cookies.length > 0 && (await page.setCookie(..._opts.cookies));
+    await page.goto(url);
+    html = await page.content();
+    browser.close();
+  }
+  urlStack.push(url);
+  console.log("loadURL done,", url);
+  return html;
 }
 
 /**

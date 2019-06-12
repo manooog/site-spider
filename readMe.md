@@ -12,6 +12,7 @@ module.exports = {
   root: "./all-sites", //本地保存的地址
   siteRoot: "http://www.baidu.com/", //需要爬取的网站的根路径
   entryURL: ["index.html"], //需要爬取的网页入口
+  static: true, // 目标网站类型，是否为静态网站
   cookies: [] // 可以使用chrome 插件 EditThisCookie 直接导出
 };
 ```
@@ -20,4 +21,4 @@ module.exports = {
 
 ## TODO
 
-- [ ] 对于静态网站不使用 headless 加载，直接使用 http get
+- [x] 对于静态网站不使用 headless 加载，直接使用 http get
