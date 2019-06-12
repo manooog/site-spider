@@ -5,6 +5,7 @@ const url = require("url");
 const fs = require("fs");
 const path = require("path");
 const config = require("../config");
+const urlStack = [];
 
 const entryInfo = url.parse(config.siteRoot);
 const siteRootPath = path.join(__dirname, "../", config.root, entryInfo.host);
@@ -13,21 +14,24 @@ const siteRootPath = path.join(__dirname, "../", config.root, entryInfo.host);
 config.entryURL.map(url => loadURL(config.siteRoot + url));
 
 async function loadURL(url) {
-  if (fs.existsSync(parseURL(url)[0])) {
-    console.log("url 已存在");
+  if (
+    fs.existsSync(parseURL(url)[0]) &&
+    urlStack.findIndex(u => url === u) > -1
+  ) {
     return;
   }
-  console.time(`loadURL:${url}`);
   try {
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
     await page.setUserAgent(config.userAgent);
+    config.cookies && (await page.setCookie(...config.cookies));
     await page.goto(url);
-    const html = await page.$eval("html", e => e.outerHTML);
+    urlStack.push(url);
+    console.log("loadURL done,", url);
+    const html = await page.content();
     browser.close();
 
     await writeFile(url, html);
-    console.log("loadURL done,", url);
 
     const $ = cheerio.load(html);
 
@@ -42,7 +46,6 @@ async function loadURL(url) {
   } catch (error) {
     console.error(error);
   }
-  console.timeEnd(`loadURL:${url}`);
 }
 
 /**
@@ -65,17 +68,12 @@ async function writeFile(location, content) {
   const { dir, base } = path.parse(filePath);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(filePath, content.replace(/\.aspx/g, ".html"));
-  console.log(`write file done ${location}`);
+  console.log(`write file done. \n remote: ${location} \n local: ${filePath}.`);
   if (location.match(/\.css/)) {
-    content
-      .match(/url\((.*?)\)/g)
-      .map(str => str.replace(/(url\()('|")?(.*?)('|")?(\))/, "$3"))
-      .filter(v => {
-        return !/^data/.test(v);
-      })
-      .map(img => {
-        download(parseURL(location, img)[1]);
-      });
+    // FIXME: 这里截取资源路径的正则还是有点不正确，匹配的范围会有点大
+    (content.match(/(\.|\/|\.\.)\/.*?\.[a-z A-Z]+/g) || []).map(img => {
+      download(parseURL(location, img)[1]);
+    });
   }
 }
 
@@ -93,7 +91,7 @@ async function download(url) {
       .then(res => {
         writeFile(url, res.data);
       })
-      .catch(console.error);
+      .catch(httpErrorHandler);
   }
 }
 
@@ -138,7 +136,7 @@ async function downloadImage(url) {
       });
     });
   } catch (error) {
-    console.error(error);
+    httpErrorHandler(error);
   }
 }
 
@@ -158,7 +156,17 @@ function parseURL(base, target) {
     filePath = path.resolve(dir, target);
     let { dir: _urlDir } = path.parse(pa);
     pa = path.join(_urlDir, target);
-    _url = protocol + "//" + host + pa;
+    _url = protocol + "//" + host + pa.replace(/\\/g, "/");
   }
   return [filePath.replace(/\.aspx/g, ".html"), _url];
+}
+
+function httpErrorHandler({ response }) {
+  if (response.status >= 400) {
+    console.log(
+      `资源获取失败. \n http-status-code: ${response.status} \n url: ${
+        response.config.url
+      }`
+    );
+  }
 }
