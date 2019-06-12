@@ -23,7 +23,7 @@ async function loadURL(url) {
   try {
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
-    await page.setUserAgent(config.userAgent);
+    config.userAgent && (await page.setUserAgent(config.userAgent));
     config.cookies && (await page.setCookie(...config.cookies));
     await page.goto(url);
     urlStack.push(url);
